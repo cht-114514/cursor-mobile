@@ -38,6 +38,15 @@ export function parseAgentJsonLine(line: string, engine: AgentEngine): Normalize
   const text = findText(raw);
   const agentSessionId = findSessionId(raw);
 
+  if (engine === "cursor" && rawType === "system") {
+    const sid = findSessionId(raw);
+    if (sid) {
+      return { type: "session.updated", agentSessionId: sid, data: raw };
+    }
+    const summary = text || findText(raw) || (raw.subtype ? String(raw.subtype) : undefined) || (raw.model ? String(raw.model) : undefined);
+    return { type: "task.log", level: "info", text: summary || "System", data: raw };
+  }
+
   if (engine === "cursor" && rawType === "assistant") {
     return { type: "agent.message", text, data: raw };
   }

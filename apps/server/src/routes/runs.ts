@@ -4,9 +4,9 @@ import { taskManager } from "../services/engine/index.js";
 export const runsRouter = Router();
 
 runsRouter.post("/:id/stop", (req, res) => {
-  const run = taskManager.cancel(req.params.id);
-  if (!run) return res.status(404).json({ error: "Run not found" });
-  res.json({ run });
+  const { task: run, outcome } = taskManager.cancel(req.params.id);
+  if (outcome === "not_found") return res.status(404).json({ error: "Run not found" });
+  res.json({ run, stopped: outcome === "cancelled", reason: outcome === "noop" ? "already_finished" : undefined });
 });
 
 runsRouter.post("/:id/retry", (req, res, next) => {

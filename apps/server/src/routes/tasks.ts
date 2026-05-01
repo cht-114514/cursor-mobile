@@ -17,9 +17,9 @@ tasksRouter.post("/", (req, res, next) => {
 });
 
 tasksRouter.post("/:id/stop", (req, res) => {
-  const task = taskManager.cancel(req.params.id);
-  if (!task) return res.status(404).json({ error: "Task not found" });
-  res.json({ task });
+  const { task, outcome } = taskManager.cancel(req.params.id);
+  if (outcome === "not_found") return res.status(404).json({ error: "Task not found" });
+  res.json({ task, stopped: outcome === "cancelled", reason: outcome === "noop" ? "already_finished" : undefined });
 });
 
 tasksRouter.post("/:id/retry", (req, res, next) => {

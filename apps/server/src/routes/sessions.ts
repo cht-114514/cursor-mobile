@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { repo } from "../db/database.js";
+import { eventHub } from "../ws/hub.js";
 
 export const sessionsRouter = Router();
 
@@ -36,7 +37,10 @@ sessionsRouter.patch("/:id", (req, res) => {
 });
 
 sessionsRouter.delete("/:id", (req, res) => {
+  const session = repo.getSession(req.params.id);
+  if (!session) return res.status(404).json({ error: "Session not found" });
   const deleted = repo.deleteSession(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Session not found" });
+  eventHub.publish({ type: "session.deleted", sessionId: session.id, projectId: session.projectId });
   res.json({ deleted: true });
 });

@@ -15,11 +15,18 @@ interface RunningTask {
   attachments: PreparedAttachment[];
 }
 
+export type CancelOutcome = "cancelled" | "not_found" | "noop";
+
+export interface CancelResult {
+  task?: TaskRecord;
+  outcome: CancelOutcome;
+}
+
 export interface TaskManager {
   sendChat(input: ChatSendInput): { session: Session; userMessage: MessageRecord; run: TaskRecord };
   createTask(input: CreateTaskInput): TaskRecord;
   listTasks(): TaskRecord[];
-  cancel(taskId: string): TaskRecord | undefined;
+  cancel(taskId: string): CancelResult;
   retry(taskId: string): TaskRecord;
 }
 
@@ -107,23 +114,39 @@ export class AgentTaskManager implements TaskManager {
     }
   }
 
-  cancel(taskId: string): TaskRecord | undefined {
+  cancel(taskId: string): CancelResult {
+    const terminal = new Set<TaskRecord["status"]>(["completed", "failed", "cancelled"]);
+    const snapshot = repo.getTask(taskId);
+    if (!snapshot) return { outcome: "not_found" };
+    if (terminal.has(snapshot.status)) {
+      return { task: snapshot, outcome: "noop" };
+    }
+
     if (this.queue.includes(taskId)) {
       this.queue = this.queue.filter((id) => id !== taskId);
       const task = repo.setTaskStatus(taskId, "cancelled");
       eventHub.publish({ type: "run.cancelled", taskId, sessionId: task?.sessionId, projectId: task?.projectId, data: task });
-      return task;
+      return { task, outcome: "cancelled" };
     }
     const running = this.running.get(taskId);
     if (running) {
+      const proc = running.process;
       this.running.delete(taskId);
       const task = repo.setTaskStatus(taskId, "cancelled");
       eventHub.publish({ type: "run.cancelled", taskId, sessionId: task?.sessionId, projectId: task?.projectId, data: task });
-      running.process.kill("SIGTERM");
+      proc.kill("SIGTERM");
+      const killTimer = setTimeout(() => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          /* process may have exited */
+        }
+      }, 2000);
+      proc.once("exit", () => clearTimeout(killTimer));
       this.pump();
-      return task;
+      return { task, outcome: "cancelled" };
     }
-    return repo.getTask(taskId);
+    return { task: snapshot, outcome: "noop" };
   }
 
   retry(taskId: string): TaskRecord {

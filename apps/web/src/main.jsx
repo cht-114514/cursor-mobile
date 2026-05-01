@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -28,6 +28,7 @@ import "./styles.css";
 const DEFAULT_MODEL = "composer-2-fast";
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
+const MAX_RUN_ACTIVITY_LINES = 25;
 
 const QUICK_PROMPTS = [
   {
@@ -105,7 +106,7 @@ function useBootData() {
     loading: true,
   });
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     const [health, projects, sessions, diagnostics, models] = await Promise.all([
       api.get("/api/health"),
       api.get("/api/projects"),
@@ -121,11 +122,11 @@ function useBootData() {
       models: models.models || [],
       loading: false,
     });
-  }
+  }, []);
 
   useEffect(() => {
     refresh().catch(() => setState((current) => ({ ...current, loading: false })));
-  }, []);
+  }, [refresh]);
 
   return [state, refresh];
 }
@@ -146,9 +147,32 @@ function App() {
   const [filesOpen, setFilesOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [liveText, setLiveText] = useState({});
+  const [runActivity, setRunActivity] = useState({});
   const [sendError, setSendError] = useState("");
+  const [toast, setToast] = useState(null);
+  const [deletingSessionId, setDeletingSessionId] = useState("");
+  const [stoppingRunId, setStoppingRunId] = useState("");
   const feedRef = useRef(null);
   const feedEndRef = useRef(null);
+  const activeSessionIdRef = useRef("");
+  const activeProjectIdRef = useRef("");
+
+  const pushToast = useCallback((message, tone = "cyan") => {
+    setToast({ message, tone });
+  }, []);
+
+  const appendRunActivity = useCallback((sessionId, text, level) => {
+    if (!sessionId || !text || !String(text).trim()) return;
+    const line = String(text).trim().slice(0, 480);
+    setRunActivity((current) => {
+      const tail = current[sessionId] || [];
+      const last = tail[tail.length - 1];
+      if (last && last.text === line) return current;
+      const row = { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, text: line, level: level || "info" };
+      const nextTail = [...tail, row].slice(-MAX_RUN_ACTIVITY_LINES);
+      return { ...current, [sessionId]: nextTail };
+    });
+  }, []);
 
   const activeProject = boot.projects.find((project) => project.id === activeProjectId) || boot.projects[0];
   const projectSessions = useMemo(
@@ -160,6 +184,20 @@ function App() {
   const activeRun = boot.runs.find((run) => run.sessionId === activeSession?.id && isActive(run));
   const serviceReady = boot.health?.service?.ok;
   const currentAccessTone = permissionTone(sandbox);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    activeProjectIdRef.current = activeProjectId;
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 4500);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     if (!activeProjectId && boot.projects[0]) setActiveProjectId(boot.projects[0].id);
@@ -190,24 +228,82 @@ function App() {
 
   useEffect(() => {
     const ws = connectEvents((event) => {
-      if (event.type === "message.delta" && event.sessionId) {
-        setLiveText((current) => ({ ...current, [event.sessionId]: `${current[event.sessionId] || ""}${event.text || ""}` }));
+      const sid = event.sessionId;
+
+      if (event.type === "message.delta" && sid) {
+        setLiveText((current) => ({ ...current, [sid]: `${current[sid] || ""}${event.text || ""}` }));
       }
 
-      if (["message.created", "message.completed", "run.started", "run.failed", "run.completed", "run.cancelled", "session.updated"].includes(event.type)) {
-        refresh(activeProjectId).catch(() => {});
-        if (event.sessionId === activeSessionId) {
-          api.get(`/api/sessions/${event.sessionId}/messages`).then((data) => {
+      if (event.type === "diagnostic.log" && sid && event.text) {
+        const level = event.level || "info";
+        if (level === "debug" && event.text.trim().length < 4) return;
+        appendRunActivity(sid, event.text, level);
+      }
+
+      if ((event.type === "tool.started" || event.type === "tool.finished") && sid && event.text) {
+        appendRunActivity(sid, `${event.type === "tool.started" ? "→ " : "✓ "}${event.text}`, "info");
+      }
+
+      if (event.type === "session.updated" && sid) {
+        appendRunActivity(sid, "会话已同步（可恢复后续对话）", "info");
+      }
+
+      if (event.type === "run.started" && sid) {
+        setRunActivity((current) => ({ ...current, [sid]: [] }));
+      }
+
+      if (["run.completed", "run.failed", "run.cancelled"].includes(event.type) && sid) {
+        setRunActivity((current) => {
+          const next = { ...current };
+          delete next[sid];
+          return next;
+        });
+      }
+
+      if (event.type === "session.deleted" && event.sessionId) {
+        const deletedId = event.sessionId;
+        setLiveText((current) => {
+          const next = { ...current };
+          delete next[deletedId];
+          return next;
+        });
+        setRunActivity((current) => {
+          const next = { ...current };
+          delete next[deletedId];
+          return next;
+        });
+        if (activeSessionIdRef.current === deletedId) {
+          setActiveSessionId("");
+          setMessages([]);
+        }
+        refresh().catch(() => {});
+        return;
+      }
+
+      if (
+        [
+          "message.created",
+          "message.completed",
+          "run.started",
+          "run.failed",
+          "run.completed",
+          "run.cancelled",
+          "session.updated",
+        ].includes(event.type)
+      ) {
+        refresh().catch(() => {});
+        if (sid && sid === activeSessionIdRef.current) {
+          api.get(`/api/sessions/${sid}/messages`).then((data) => {
             setMessages(data.messages || []);
             if (["message.completed", "run.failed", "run.completed", "run.cancelled"].includes(event.type)) {
-              setLiveText((current) => ({ ...current, [event.sessionId]: "" }));
+              setLiveText((current) => ({ ...current, [sid]: "" }));
             }
           });
         }
       }
     });
     return () => ws?.close();
-  }, [activeSessionId, activeProjectId]);
+  }, [appendRunActivity, refresh]);
 
   async function sendPrompt() {
     if ((!prompt.trim() && attachments.length === 0) || !activeProject || activeRun) return;
@@ -328,17 +424,54 @@ function App() {
 
   async function deleteSession(sessionId) {
     if (!window.confirm("Delete this session from Cursor Mobile?")) return;
-    await api.del(`/api/sessions/${sessionId}`);
-    if (sessionId === activeSessionId) {
-      setActiveSessionId("");
-      setMessages([]);
+    setDeletingSessionId(sessionId);
+    try {
+      await api.del(`/api/sessions/${sessionId}`);
+      pushToast("会话已从本机移除", "green");
+      if (sessionId === activeSessionId) {
+        setActiveSessionId("");
+        setMessages([]);
+      }
+      setLiveText((current) => {
+        const next = { ...current };
+        delete next[sessionId];
+        return next;
+      });
+      setRunActivity((current) => {
+        const next = { ...current };
+        delete next[sessionId];
+        return next;
+      });
+      await refresh();
+    } catch (error) {
+      const msg = error.message || "删除失败";
+      if (msg.includes("404") || /not found/i.test(msg)) {
+        pushToast("会话已不存在（可能已被删除）", "yellow");
+        await refresh();
+      } else {
+        pushToast(msg, "red");
+      }
+    } finally {
+      setDeletingSessionId("");
     }
-    await refresh(activeProject?.id);
   }
 
   async function stopRun(runId) {
-    await api.post(`/api/runs/${runId}/stop`, {});
-    await refresh(activeProjectId);
+    if (!runId || stoppingRunId) return;
+    setStoppingRunId(runId);
+    try {
+      const data = await api.post(`/api/runs/${runId}/stop`, {});
+      if (data.stopped) {
+        pushToast("已发送终止信号", "green");
+      } else if (data.reason === "already_finished") {
+        pushToast("该任务已结束，无需再终止", "yellow");
+      }
+      await refresh();
+    } catch (error) {
+      pushToast(error.message || "终止失败", "red");
+    } finally {
+      setStoppingRunId("");
+    }
   }
 
   async function retryRun(runId) {
@@ -433,8 +566,13 @@ function App() {
               </div>
               <p>{message.content}</p>
               {message.live && activeRun && (
-                <button className="inline-action tone-red" onClick={() => stopRun(activeRun.id)}>
-                  <Square size={15} /> Stop
+                <button
+                  className="inline-action tone-red"
+                  type="button"
+                  disabled={stoppingRunId === activeRun.id}
+                  onClick={() => stopRun(activeRun.id)}
+                >
+                  <Square size={15} /> {stoppingRunId === activeRun.id ? "Stopping…" : "Stop"}
                 </button>
               )}
               {run?.status === "failed" && (
@@ -453,8 +591,22 @@ function App() {
               <small>{activeRun.status === "queued" ? "Waiting" : "Thinking"}</small>
             </div>
             <p className="pulse-line">Working on your Mac</p>
-            <button className="inline-action tone-red" onClick={() => stopRun(activeRun.id)}>
-              <Square size={15} /> Stop
+            {(runActivity[activeSession?.id] || []).length > 0 && (
+              <ul className="run-activity-log" aria-live="polite" aria-label="Agent activity">
+                {(runActivity[activeSession.id] || []).map((row) => (
+                  <li key={row.id} className={`run-activity-line level-${row.level || "info"}`}>
+                    {row.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button
+              className="inline-action tone-red"
+              type="button"
+              disabled={stoppingRunId === activeRun.id}
+              onClick={() => stopRun(activeRun.id)}
+            >
+              <Square size={15} /> {stoppingRunId === activeRun.id ? "Stopping…" : "Stop"}
             </button>
           </article>
         )}
@@ -463,6 +615,12 @@ function App() {
 
       <footer className="composer">
         <div className="composer-shell">
+          {toast && (
+            <div className={`toast-banner tone-${toast.tone}`} role="status">
+              <ToneMark tone={toast.tone} />
+              {toast.message}
+            </div>
+          )}
           {sendError && <div className="composer-error">{sendError}</div>}
           {attachments.length > 0 && (
             <div className="attachment-strip" aria-label="Attachments">
@@ -542,6 +700,7 @@ function App() {
         onDeleteProject={deleteProject}
         onRenameSession={renameSession}
         onDeleteSession={deleteSession}
+        deletingSessionId={deletingSessionId}
       />
       <ToolsDrawer
         open={toolsOpen}
@@ -580,6 +739,7 @@ function SessionDrawer({
   onDeleteProject,
   onRenameSession,
   onDeleteSession,
+  deletingSessionId,
 }) {
   return (
     <aside className={`drawer left ${open ? "open" : ""}`} aria-hidden={!open} inert={open ? undefined : ""}>
@@ -608,6 +768,7 @@ function SessionDrawer({
             onDeleteProject={onDeleteProject}
             onRenameSession={onRenameSession}
             onDeleteSession={onDeleteSession}
+            deletingSessionId={deletingSessionId}
           />
         ))}
       </div>
@@ -627,6 +788,7 @@ function ProjectNode({
   onDeleteProject,
   onRenameSession,
   onDeleteSession,
+  deletingSessionId,
 }) {
   const selected = project.id === activeProjectId;
   const [editingProject, setEditingProject] = useState(false);
@@ -832,7 +994,16 @@ function ProjectNode({
                 >
                   <Pencil size={14} />
                 </button>
-                <button className="icon-button danger compact tone-red" onClick={(event) => { event.stopPropagation(); onDeleteSession(session.id); }} aria-label={`Delete ${session.title}`}>
+                <button
+                  className="icon-button danger compact tone-red"
+                  type="button"
+                  disabled={deletingSessionId === session.id}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeleteSession(session.id);
+                  }}
+                  aria-label={`Delete ${session.title}`}
+                >
                   <Trash2 size={14} />
                 </button>
               </div>

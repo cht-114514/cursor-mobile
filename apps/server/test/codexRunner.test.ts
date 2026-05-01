@@ -104,7 +104,8 @@ sleep 2
     const project = ctx.repo.createProject("Project", ctx.projectDir);
     const result = ctx.taskManager.sendChat({ projectId: project.id, prompt: "cancel me" });
     await waitFor(() => ctx.repo.getTask(result.run.id)?.status, "running");
-    ctx.taskManager.cancel(result.run.id);
+    const cancelResult = ctx.taskManager.cancel(result.run.id);
+    expect(cancelResult.outcome).toBe("cancelled");
     await new Promise((resolve) => setTimeout(resolve, 120));
 
     expect(ctx.repo.getTask(result.run.id)?.status).toBe("cancelled");
@@ -223,5 +224,26 @@ printf '{"type":"item.completed","item":{"type":"agent_message","text":"attachme
     expect(stdin).toContain("notes.txt");
     expect(stdin).toContain("mock.png");
     expect(ctx.repo.listMessages(result.session.id).find((message) => message.role === "assistant")?.content).toBe("attachments ok");
+  });
+
+  it("cancel on finished task is noop", async () => {
+    const ctx = await setup(`#!/usr/bin/env bash
+if [ "\${1:-}" = "--version" ]; then printf 'fake-codex\\n'; exit 0; fi
+if [ "\${1:-}" = "debug" ]; then printf '{"models":[]}\\n'; exit 0; fi
+cat >/dev/null
+printf '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\\n'
+`);
+    cleanup = async () => {
+      ctx.db.close();
+      await fs.rm(ctx.tempRoot, { recursive: true, force: true });
+    };
+
+    const project = ctx.repo.createProject("Project", ctx.projectDir);
+    const result = ctx.taskManager.sendChat({ projectId: project.id, prompt: "hello" });
+    await waitFor(() => ctx.repo.getTask(result.run.id)?.status, "completed");
+
+    const again = ctx.taskManager.cancel(result.run.id);
+    expect(again.outcome).toBe("noop");
+    expect(again.task?.status).toBe("completed");
   });
 });

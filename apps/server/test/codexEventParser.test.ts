@@ -50,6 +50,11 @@ describe("parseAgentJsonLine", () => {
       type: "session.updated",
       agentSessionId: "abc",
     });
+    expect(parseAgentJsonLine('{"type":"system","model":"Composer 2 Fast"}', "cursor")).toMatchObject({
+      type: "task.log",
+      level: "info",
+      text: "Composer 2 Fast",
+    });
     expect(
       parseAgentJsonLine('{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ready"}]},"session_id":"abc"}', "cursor"),
     ).toMatchObject({
