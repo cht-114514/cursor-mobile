@@ -35,7 +35,7 @@ The web app is served by the Mac service in production-style runs. During develo
 ## Quick Start
 
 ```sh
-git clone https://github.com/chen/cursor-mobile.git
+git clone https://github.com/cht-114514/cursor-mobile.git
 cd cursor-mobile
 bash scripts/install.sh
 npm run dev
