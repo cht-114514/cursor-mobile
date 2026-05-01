@@ -1,0 +1,31 @@
+{
+  "name": "cursor-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mobile-first Cursor companion for Mac and iPhone over Tailscale.",
+  "workspaces": [
+    "apps/server",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,green \"npm run dev -w @cursor-mobile/server\" \"npm run dev -w @cursor-mobile/web\"",
+    "server": "npm run dev -w @cursor-mobile/server",
+    "web": "npm run dev -w @cursor-mobile/web",
+    "build": "npm run build -w @cursor-mobile/server && npm run build -w @cursor-mobile/web",
+    "start": "npm run start -w @cursor-mobile/server",
+    "test": "npm run test -w @cursor-mobile/server",
+    "install:local": "bash scripts/install.sh",
+    "service:install": "bash scripts/install-launchagent.sh",
+    "service:restart": "bash scripts/restart-service.sh",
+    "service:stop": "bash scripts/stop-service.sh",
+    "service:status": "bash scripts/status-service.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  }
+}

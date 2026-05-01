@@ -1,0 +1,9 @@
+{
+  "name": "Cursor Mobile",
+  "short_name": "Cursor",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#2f6df6",
+  "icons": []
+}

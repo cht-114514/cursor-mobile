@@ -1,0 +1,6 @@
+{"type":"session.created","session_id":"019abc-demo"}
+{"type":"agent_message_delta","delta":"Hello"}
+{"type":"agent_message_delta","delta":", mobile Codex."}
+{"type":"exec_command_begin","command":"pwd"}
+{"type":"exec_command_end","exit_code":0,"output":"/tmp"}
+{"type":"agent_message","message":"Hello, mobile Codex."}
