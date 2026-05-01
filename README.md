@@ -126,6 +126,10 @@ Workspace layout:
 - The menu bar companion is source-first and assumes local Node/npm/Cursor/Codex/Tailscale installs.
 - Authentication is intentionally minimal because Tailscale/private network access is the expected boundary.
 
+## Acknowledgements
+
+This project was inspired by [Codex CLI UI](https://github.com/cruzyjapan/Codex-CLI-UI), an open-source desktop and mobile UI for the Codex CLI. The session and project model, the idea of pairing a local Node service with a mobile PWA, and several early UI patterns all trace back to that work.
+
 ## License
 
 MIT
